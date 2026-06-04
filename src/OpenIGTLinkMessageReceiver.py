@@ -10,6 +10,7 @@ pyigtl handles header parsing, body reading, and CRC64 verification
 Requires: pyigtl >= 0.2.0, numpy
 """
 from __future__ import annotations
+import time
 from typing import Callable, Optional
 
 import numpy as np
@@ -19,6 +20,11 @@ import pyigtl
 class OpenIGTLinkMessageReceiver:
     """
     Wraps a pyigtl client to receive and dispatch typed OpenIGTLink messages.
+
+    pyigtl's wait_for_message() requires a specific device_name, which is not
+    known ahead of time when receiving arbitrary messages from Slicer.
+    Instead, get_latest_message() is polled in a loop until a message arrives
+    or the timeout expires.
 
     Usage
     -----
@@ -39,21 +45,24 @@ class OpenIGTLinkMessageReceiver:
         on_point:     Optional[Callable[[str, np.ndarray], None]]   = None,
         on_image:     Optional[Callable[[str, dict], None]]         = None,
         timeout: float = 5.0,
+        poll_interval: float = 0.01,
     ) -> None:
         """
         Parameters
         ----------
-        client      : live client from igtl_connect()
-        on_status   : callback(device_name: str, message: str)
-        on_string   : callback(device_name: str, text: str)
-        on_transform: callback(device_name: str, matrix: ndarray [4x4])
-        on_point    : callback(device_name: str, point_list: ndarray [Nx3])
-        on_image    : callback(device_name: str, image: dict)
-                        image dict keys: 'matrix' (ndarray), 'spacing', 'origin'
-        timeout     : seconds to wait for each incoming message
+        client         : live client from igtl_connect()
+        on_status      : callback(device_name: str, message: str)
+        on_string      : callback(device_name: str, text: str)
+        on_transform   : callback(device_name: str, matrix: ndarray [4x4])
+        on_point       : callback(device_name: str, point_list: ndarray [Nx3])
+        on_image       : callback(device_name: str, image: dict)
+                           image dict keys: 'matrix' (ndarray), 'spacing', 'origin'
+        timeout        : total seconds to wait for each incoming message
+        poll_interval  : seconds between get_latest_message() polls
         """
-        self._client  = client
-        self._timeout = timeout
+        self._client        = client
+        self._timeout       = timeout
+        self._poll_interval = poll_interval
         self._cb = {
             'STATUS':    on_status    or (lambda n, m: None),
             'STRING':    on_string    or (lambda n, m: None),
@@ -68,33 +77,36 @@ class OpenIGTLinkMessageReceiver:
 
     def read_message(self):
         """
-        Block until one message arrives, dispatch it to the matching callback,
+        Poll until one message arrives, dispatch it to the matching callback,
         and return the result.
 
         Returns
         -------
         (device_name: str, data: any) - or (None, None) on timeout.
         """
-        msg = self._client.wait_for_message(timeout=self._timeout)
-        if msg is None:
-            print("Timeout: no message received.")
-            return None, None
+        deadline = time.time() + self._timeout
+        while time.time() < deadline:
+            msg = self._client.get_latest_message()
+            if msg is not None:
+                msg_type = msg.message_type.strip().upper()
+                name     = msg.device_name.strip('\x00').strip()
 
-        msg_type = msg.message_type.strip().upper()
-        name     = msg.device_name.strip('\x00').strip()
+                handlers = {
+                    'STATUS':    self._handle_status,
+                    'STRING':    self._handle_string,
+                    'TRANSFORM': self._handle_transform,
+                    'POINT':     self._handle_point,
+                    'IMAGE':     self._handle_image,
+                }
+                handler = handlers.get(msg_type)
+                if handler is None:
+                    print(f"Currently unsupported message type: {msg_type}")
+                    return name, None
+                return handler(msg, name)
+            time.sleep(self._poll_interval)
 
-        handlers = {
-            'STATUS':    self._handle_status,
-            'STRING':    self._handle_string,
-            'TRANSFORM': self._handle_transform,
-            'POINT':     self._handle_point,
-            'IMAGE':     self._handle_image,
-        }
-        handler = handlers.get(msg_type)
-        if handler is None:
-            print(f"Currently unsupported message type: {msg_type}")
-            return name, None
-        return handler(msg, name)
+        print("Timeout: no message received.")
+        return None, None
 
     # ------------------------------------------------------------------
     # Per-type handlers

@@ -84,27 +84,27 @@ class OpenIGTLinkMessageSender:
         point_list : (N, 3) array_like, float32
             XYZ coordinates in mm.
 
-        Slicer metadata:  MRMLNodeName='MarkupsFiducial', Status='OK'
+        pyigtl PointMessage constructor takes separate keyword arrays:
+            positions, names, groups, rgba_colors, diameters, owners
 
-        Note: each point is packed as 136 bytes per the OpenIGTLink POINT spec:
-              name(64) + group(32) + RGBA(4) + XYZ(12) + diameter(4) + owner(20)
+        Slicer metadata:  MRMLNodeName='MarkupsFiducial', Status='OK'
         """
         pts = np.asarray(point_list, dtype=np.float32)
         if pts.ndim != 2 or pts.shape[1] != 3:
             raise ValueError("point_list must be shape (N, 3).")
 
-        points = []
-        for i, xyz in enumerate(pts):
-            points.append({
-                'name':       f"{device_name}-{i + 1}",
-                'group_name': 'Selected',
-                'rgba':       [255, 127, 127, 255],
-                'position':   xyz.tolist(),
-                'radius':     0.0,
-                'owner':      '',
-            })
+        n = len(pts)
+        names      = [f"{device_name}-{i + 1}" for i in range(n)]
+        groups     = ['Selected'] * n
+        rgba_colors = [[255, 127, 127, 255]] * n
 
-        msg = pyigtl.PointMessage(points=points, device_name=device_name)
+        msg = pyigtl.PointMessage(
+            positions=pts.tolist(),
+            names=names,
+            groups=groups,
+            rgba_colors=rgba_colors,
+            device_name=device_name,
+        )
         msg.metadata = {'MRMLNodeName': 'MarkupsFiducial', 'Status': 'OK'}
         return self._send(msg)
 
@@ -123,41 +123,47 @@ class OpenIGTLinkMessageSender:
         Parameters
         ----------
         image_input : ndarray or dict
-            ndarray  - 2-D, 3-D, or 4-D (last axis = channels).
+            ndarray  - 2-D, 3-D, or 4-D (last axis = channels); 1 mm isotropic LPS assumed.
             dict with keys:
                 'matrix'      - numpy array  (required)
                 'origin'      - [Px, Py, Pz] in mm        (default [0,0,0])
                 'orientation' - (3,3) float32 array
-                                rows = T, S, N direction vectors;
-                                vector norms define voxel spacing in mm
+                                columns = i, j, k axis directions scaled by voxel spacing
                                 (default identity -> 1 mm isotropic)
-                'coordinate'  - 1=RAS, 2=LPS  (informational, default 2)
+                'coordinate'  - 1=RAS, 2=LPS  (default 2)
+
+        pyigtl ImageMessage constructor takes:
+            image, ijk_to_world_matrix (4x4), world_coordinate_system ('lps'/'ras')
 
         Slicer metadata:  MRMLNodeName='ScalarVolume'
         """
         if isinstance(image_input, np.ndarray):
-            mat    = image_input
-            origin = [0.0, 0.0, 0.0]
-            orient = np.eye(3, dtype=np.float32)
+            mat                    = image_input
+            ijk_to_world           = np.eye(4, dtype=np.float32)
+            world_coordinate_system = 'lps'
         elif isinstance(image_input, dict):
             mat    = np.asarray(image_input['matrix'])
             origin = list(image_input.get('origin', [0.0, 0.0, 0.0]))
             orient = np.asarray(
                 image_input.get('orientation', np.eye(3)), dtype=np.float32
             )
+            coordinate = image_input.get('coordinate', 2)
+            world_coordinate_system = 'ras' if coordinate == 1 else 'lps'
+
+            # Build 4x4 ijk_to_world: columns are axis directions (scaled by spacing)
+            ijk_to_world = np.eye(4, dtype=np.float32)
+            ijk_to_world[:3, :3] = orient
+            ijk_to_world[:3,  3] = origin
         else:
             raise TypeError("image_input must be a numpy array or a dict.")
 
         if mat.ndim < 2 or mat.ndim > 4:
             raise ValueError("Image matrix must be 2-D, 3-D, or 4-D.")
 
-        spacing = [float(np.linalg.norm(orient[r])) for r in range(3)]
-        spacing = [s if s > 0 else 1.0 for s in spacing]
-
         msg = pyigtl.ImageMessage(
             image=mat,
-            spacing=spacing,
-            origin=origin,
+            ijk_to_world_matrix=ijk_to_world,
+            world_coordinate_system=world_coordinate_system,
             device_name=device_name,
         )
         msg.metadata = {'MRMLNodeName': 'ScalarVolume'}

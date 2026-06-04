@@ -55,7 +55,8 @@ class OpenIGTLinkMessageReceiver:
         on_transform   : callback(device_name: str, matrix: ndarray [4x4])
         on_point       : callback(device_name: str, point_list: ndarray [Nx3])
         on_image       : callback(device_name: str, image: dict)
-                           image dict keys: 'matrix' (ndarray), 'spacing', 'origin'
+                           image dict keys: 'matrix', 'spacing', 'origin',
+                           'world_coordinate_system'
         timeout        : total seconds to wait for each incoming message
         poll_interval  : seconds between get_latest_messages() polls
         """
@@ -132,22 +133,26 @@ class OpenIGTLinkMessageReceiver:
         return name, matrix
 
     def _handle_point(self, msg, name: str):
-        # pyigtl PointMessage exposes points via get_number_of_points()
-        # and get_point_element(i), each with a .position attribute.
-        n = msg.get_number_of_points()
-        point_list = np.array(
-            [list(msg.get_point_element(i).position) for i in range(n)],
-            dtype=np.float64,
-        )
+        # pyigtl PointMessage unpacks point data into msg.positions:
+        # a list of (x, y, z) tuples (set by _unpack_content).
+        point_list = np.array(msg.positions, dtype=np.float64)
         self._cb['POINT'](name, point_list)
         return name, point_list
 
     def _handle_image(self, msg, name: str):
         print(f"IMAGE message received: {name}")
+        # pyigtl ImageMessage unpacks into msg.image and msg.ijk_to_world_matrix.
+        # Extract spacing (column norms) and origin (last column) for convenience.
+        spacing = [
+            float(np.linalg.norm(msg.ijk_to_world_matrix[:3, i]))
+            for i in range(3)
+        ]
+        origin = msg.ijk_to_world_matrix[:3, 3].tolist()
         image = {
-            'matrix':  msg.image,
-            'spacing': list(msg.spacing),
-            'origin':  list(msg.origin),
+            'matrix':                  msg.image,
+            'spacing':                 spacing,
+            'origin':                  origin,
+            'world_coordinate_system': msg.world_coordinate_system,
         }
         self._cb['IMAGE'](name, image)
         return name, image

@@ -21,10 +21,9 @@ class OpenIGTLinkMessageReceiver:
     """
     Wraps a pyigtl client to receive and dispatch typed OpenIGTLink messages.
 
-    pyigtl's wait_for_message() requires a specific device_name, which is not
-    known ahead of time when receiving arbitrary messages from Slicer.
-    Instead, get_latest_message() is polled in a loop until a message arrives
-    or the timeout expires.
+    pyigtl's wait_for_message() requires a specific device_name upfront.
+    Instead, get_latest_messages() is polled in a loop — it returns a list
+    of all messages received since the last call, so we take the first one.
 
     Usage
     -----
@@ -58,7 +57,7 @@ class OpenIGTLinkMessageReceiver:
         on_image       : callback(device_name: str, image: dict)
                            image dict keys: 'matrix' (ndarray), 'spacing', 'origin'
         timeout        : total seconds to wait for each incoming message
-        poll_interval  : seconds between get_latest_message() polls
+        poll_interval  : seconds between get_latest_messages() polls
         """
         self._client        = client
         self._timeout       = timeout
@@ -80,14 +79,19 @@ class OpenIGTLinkMessageReceiver:
         Poll until one message arrives, dispatch it to the matching callback,
         and return the result.
 
+        get_latest_messages() returns a list of all messages buffered since
+        the last call. We dispatch the first one and return.
+
         Returns
         -------
         (device_name: str, data: any) - or (None, None) on timeout.
         """
         deadline = time.time() + self._timeout
         while time.time() < deadline:
-            msg = self._client.get_latest_message()
-            if msg is not None:
+            messages = self._client.get_latest_messages()
+            if messages:
+                # Take the first available message
+                msg      = messages[0]
                 msg_type = msg.message_type.strip().upper()
                 name     = msg.device_name.strip('\x00').strip()
 

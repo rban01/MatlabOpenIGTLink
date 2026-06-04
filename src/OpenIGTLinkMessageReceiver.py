@@ -90,7 +90,6 @@ class OpenIGTLinkMessageReceiver:
         while time.time() < deadline:
             messages = self._client.get_latest_messages()
             if messages:
-                # Take the first available message
                 msg      = messages[0]
                 msg_type = msg.message_type.strip().upper()
                 name     = msg.device_name.strip('\x00').strip()
@@ -133,10 +132,11 @@ class OpenIGTLinkMessageReceiver:
         return name, matrix
 
     def _handle_point(self, msg, name: str):
-        raw = msg.points
+        # pyigtl PointMessage exposes points via get_number_of_points()
+        # and get_point_element(i), each with a .position attribute.
+        n = msg.get_number_of_points()
         point_list = np.array(
-            [p['position'] if isinstance(p, dict) else list(p.position)
-             for p in raw],
+            [list(msg.get_point_element(i).position) for i in range(n)],
             dtype=np.float64,
         )
         self._cb['POINT'](name, point_list)

@@ -6,6 +6,7 @@ Thin wrappers around pyigtl.OpenIGTLinkClient that provide the same
 connect / disconnect interface as the original MATLAB functions.
 """
 from __future__ import annotations
+import time
 import pyigtl
 
 
@@ -24,6 +25,9 @@ def igtl_connect(hostname: str = 'localhost', port: int = 18944) -> pyigtl.OpenI
     """
     try:
         client = pyigtl.OpenIGTLinkClient(host=hostname, port=port)
+        # Give the background receive thread time to start and buffer
+        # the initial STATUS handshake sent by Slicer on connection.
+        time.sleep(0.5)
         print(f"Connected to OpenIGTLink server at {hostname}:{port}")
         return client
     except Exception as exc:
@@ -41,5 +45,5 @@ def igtl_disconnect(client: pyigtl.OpenIGTLinkClient) -> None:
     client : pyigtl.OpenIGTLinkClient  -  object returned by igtl_connect()
     """
     if client is not None:
-        client.disconnect()
+        client.stop()
         print("Disconnected from OpenIGTLink server.")

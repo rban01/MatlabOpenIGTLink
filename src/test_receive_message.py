@@ -2,8 +2,8 @@
 test_receive_message.py
 Replaces: testReceiveMessage.m
 
-Connects to a running 3D Slicer OpenIGTLinkIF server, waits for N messages
-(skipping the initial STATUS handshake), then disconnects.
+Connects to a running 3D Slicer OpenIGTLinkIF server, receives all
+messages until the server goes quiet (timeout), then disconnects.
 """
 import numpy as np
 
@@ -50,8 +50,6 @@ def on_rx_image_message(device_name: str, image: dict) -> None:
 # -----------------------------------------------------------------------
 
 def test_receive_message() -> None:
-    N = 1   # number of data messages to receive (not counting initial STATUS)
-
     client = igtl_connect('127.0.0.1', 18944)
 
     receiver = OpenIGTLinkMessageReceiver(
@@ -64,8 +62,11 @@ def test_receive_message() -> None:
         timeout      = 5.0,
     )
 
-    for _ in range(N + 1):    # +1 to consume the initial STATUS message
-        receiver.read_message()
+    # Receive all messages until the server goes quiet (timeout signals end-of-burst)
+    while True:
+        name, data = receiver.read_message()
+        if name is None:    # timeout → no more messages
+            break
 
     igtl_disconnect(client)
 

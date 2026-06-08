@@ -11,6 +11,7 @@ Requires: pyigtl >= 0.2.0, numpy
 """
 from __future__ import annotations
 import time
+from collections import deque
 from typing import Callable, Optional
 
 import numpy as np
@@ -23,7 +24,9 @@ class OpenIGTLinkMessageReceiver:
 
     pyigtl's wait_for_message() requires a specific device_name upfront.
     Instead, get_latest_messages() is polled in a loop — it returns a list
-    of all messages received since the last call, so we take the first one.
+    of all messages received since the last call. All returned messages are
+    buffered internally; successive read_message() calls drain that buffer
+    before polling the network again, so no messages are dropped.
 
     Usage
     -----
@@ -63,6 +66,7 @@ class OpenIGTLinkMessageReceiver:
         self._client        = client
         self._timeout       = timeout
         self._poll_interval = poll_interval
+        self._pending: deque = deque()
         self._cb = {
             'STATUS':    on_status    or (lambda n, m: None),
             'STRING':    on_string    or (lambda n, m: None),
@@ -80,8 +84,9 @@ class OpenIGTLinkMessageReceiver:
         Poll until one message arrives, dispatch it to the matching callback,
         and return the result.
 
-        get_latest_messages() returns a list of all messages buffered since
-        the last call. We dispatch the first one and return.
+        ALL messages returned by get_latest_messages() are buffered internally;
+        subsequent calls drain that buffer before polling the network again,
+        so no messages are silently dropped.
 
         Returns
         -------
@@ -89,9 +94,13 @@ class OpenIGTLinkMessageReceiver:
         """
         deadline = time.time() + self._timeout
         while time.time() < deadline:
-            messages = self._client.get_latest_messages()
-            if messages:
-                msg      = messages[0]
+            # Refill from the network only when local buffer is empty
+            if not self._pending:
+                new_msgs = self._client.get_latest_messages()
+                self._pending.extend(new_msgs)
+
+            if self._pending:
+                msg      = self._pending.popleft()
                 msg_type = msg.message_type.strip().upper()
                 name     = msg.device_name.strip('\x00').strip()
 
@@ -107,6 +116,7 @@ class OpenIGTLinkMessageReceiver:
                     print(f"Currently unsupported message type: {msg_type}")
                     return name, None
                 return handler(msg, name)
+
             time.sleep(self._poll_interval)
 
         print("Timeout: no message received.")

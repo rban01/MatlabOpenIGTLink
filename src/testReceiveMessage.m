@@ -2,13 +2,22 @@
 function testReceiveMessage()
     clc; close all;
 
-    % Set IP socket and number of messages (N) to receive
-    N = 1;
     sock = igtlConnect('127.0.0.1', 18944);
     receiver = OpenIGTLinkMessageReceiver(sock, @onRxStatusMessage, @onRxStringMessage, @onRxTransformMessage, @onRxPointMessage, @onRxImageMessage);
-    for i=1:N+1 % not counting first STATUS message (N+1)
-        receiver.readMessage();
+
+    % Receive all messages until the server goes quiet (timeout signals end-of-burst)
+    while true
+        try
+            receiver.readMessage();
+        catch e
+            if contains(e.message, 'Timeout')
+                break;
+            else
+                rethrow(e);
+            end
+        end
     end
+
     igtlDisconnect(sock);
 end
 
